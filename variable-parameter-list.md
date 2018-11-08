@@ -619,7 +619,7 @@ std::cout << seq   ([](auto a, auto b){ return a - b; }, 1, 2, 3, 4) << std::end
 std::cout << seq_v2([](auto a, auto b){ return a - b; }, 1, 2, 3, 4) << std::endl; // -8
 ```
 
-有意思的事情出现了，`seq`和`seq_v2`对减法的计算结果不一致。这是因为减法不满足交换律，对于[![](https://camo.githubusercontent.com/f69c43ced567832ed4efc32fe3409c6b4a706987/687474703a2f2f6c617465782e636f6465636f67732e636f6d2f6769662e6c617465783f612d62)](https://camo.githubusercontent.com/f69c43ced567832ed4efc32fe3409c6b4a706987/687474703a2f2f6c617465782e636f6465636f67732e636f6d2f6769662e6c617465783f612d62)来说，`seq`展开后的式子如下
+有意思的事情出现了，`seq`和`seq_v2`对减法的计算结果不一致。这是因为减法不满足交换律，对 $$a - b$$ 来说，`seq`展开后的式子如下
 
 $$
 \begin{aligned}
