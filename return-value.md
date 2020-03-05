@@ -5,28 +5,24 @@
 大凡编程语言，都会有“函数”这个概念。对于外部的调用者来说，一个函数的返回值，往往体现了它的全部功能（有副作用的函数除外）。
 
 返回值其实应该是一个简单的话题。我们一般都希望自己的函数是幂等的，此时使用返回值来返回计算的结果则是理所当然的事情。比如说像下面这样：
-
 ```cpp
-int add(int a, int b)
-{
+int add(int a, int b) {
     return a + b;
 }
  
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     int i = add(1, 2);
     std::cout << i << std::endl;
     return 0;
 }
 ```
+这里我们的`add`函数通过`int`类型返回值直接返回了相加的结果。
 
-不论是函数还是调用者都会身心愉悦，因为这是最自然的使用方法了。但是在C++里，通过函数返回值返回处理结果往往是一种奢侈的行为。
+在这个例子里，我们的返回值是没有什么额外代价的。但是在我们使用了对象以后，直接返回一个对象的实例往往是一种奢侈的行为。
 
-让我们看一个新的例子：
-
+让我们来看一个新的例子：
 ```cpp
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     std::string ss;
     std::string s1("Hello"), s2("-"), s3("World"), s4("!");
     ss = s1 + s2 + s3 + s4;
@@ -34,12 +30,9 @@ int main(int argc, char* argv[])
     return 0;
 }
 ```
-
  相信有经验的C++程序员看到了都会皱眉头，良好的做法应当是使用`+=`来代替之：
-
 ```cpp
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     std::string ss;
     std::string s1("Hello"), s2("-"), s3("World"), s4("!");
     ss += s1 += s2 += s3 += s4;
@@ -47,9 +40,7 @@ int main(int argc, char* argv[])
     return 0;
 }
 ```
-
 原因很简单，`+`和`+=`的操作符重载的实现一般而言是像这样的：
-
 ```cpp
 operator char*(void) const
 {
