@@ -18,179 +18,237 @@ int main(int argc, char* argv[]) {
 ```
 这里我们的`add`函数通过`int`类型返回值直接返回了相加的结果。
 
-在这个例子里，我们的返回值是没有什么额外代价的。但是在我们使用了对象以后，直接返回一个对象的实例往往是一种奢侈的行为。
+在这个例子里，我们的返回值是没有什么额外代价的。但是在我们使用了对象以后，直接返回一个实例往往是一种奢侈的行为。
 
-让我们来看一个新的例子：
+让我们用经典的字符串操作作为例子：
 ```cpp
-int main(int argc, char* argv[]) {
-    std::string ss;
-    std::string s1("Hello"), s2("-"), s3("World"), s4("!");
-    ss = s1 + s2 + s3 + s4;
-    std::cout << ss << std::endl;
+int main() {
+    string ss;
+    string s1("Hello"), s2("World"), s3("!");
+    ss = s1 + '-' + s2 + s3;
+    std::cout << ss.cdata() << std::endl;
     return 0;
 }
 ```
- 相信有经验的C++程序员看到了都会皱眉头，良好的做法应当是使用`+=`来代替之：
-```cpp
-int main(int argc, char* argv[]) {
-    std::string ss;
-    std::string s1("Hello"), s2("-"), s3("World"), s4("!");
-    ss += s1 += s2 += s3 += s4;
-    std::cout << ss << std::endl;
-    return 0;
-}
+输出：
 ```
-原因很简单，`+`和`+=`的操作符重载的实现一般而言是像这样的：
-```cpp
-operator char*(void) const
-{
-    return str_;
-}
- 
-Str& operator+=(const char* str)
-{
-    if (str) strcat_s(str_, 1024, str);
-    return (*this);
-}
- 
-friend Str operator+(const Str& x, const Str& y)
-{
-    return Str(x) += y;
-}
+Hello-World!
 ```
-
-注意到上面，由于`operator+`不能修改任何一个参数，所以必须构建一个临时变量`Str(x)`，并且`Str(x)`在把值传递出去之后，自身马上就销毁了。外面负责接收的变量只能得到并复制一遍`Str(x)`，于是一个简单的返回值就造成了两次`x`的拷贝。当像上文“`ss = s1 + s2 + s3 + s4`”这样连加的时候，拷贝就会像击鼓传花一样，在每一次+调用处发生。
-
-我们也不可能把`operator+`的返回值像`operator+=`一样用引用或指针来代替，否则外部得到的引用将是一个悬空引用，无法通过它拿到处理后的数据。
-
-为了说明问题，我们可以写一个简单的例子来看看这样赋值到底会有多大的损耗：
-
+结果是正确的，但在性能上会非常难受。为了说明问题，我们先给出一个简单的`string`实现：
 ```cpp
 // Using C++ 98/03
-class Str
-{
-private:
-    char* str_;
- 
+
+#include <stddef.h>
+#include <string.h>
+#include <stdlib.h>
+
+namespace test {
+
+class string {
+
+    char * data_;
+    size_t len_;
+
+    void extend(size_t new_len) {
+        if (new_len <= len_) return;
+        data_ = (char *)realloc((void *)data_, (len_ = new_len) + 1);
+    }
+
 public:
-    Str(void)                       // Default constructor, do nothing
-        : str_(nullptr)
-    {}
- 
-    Str(const char* rhs)            // Constructor declaration
-        : str_(nullptr)
-    {
-        if (!rhs) return;
-        str_ = new char[1024];
-        strcpy_s(str_, 1024, rhs);
-        std::cout << "Str constructor " << str_ << std::endl;
+    string()
+        : data_(NULL), len_(0) {}
+
+    string(char c)
+        : data_(NULL), len_(1) {
+        data_ = (char *)malloc(len_ + 1);
+        data_[0] = c;
+        data_[1] = '\0';
     }
- 
-    Str(const Str& rhs)             // Copy constructor
-        : str_(nullptr)
-    {
-        if (!rhs) return;
-        str_ = new char[1024];
-        strcpy_s(str_, 1024, rhs.str_);
-        std::cout << "Str copy constructor " << str_ << std::endl;
+
+    string(char const * str)
+        : data_(NULL), len_(strlen(str)) {
+        data_ = strcpy((char *)malloc(len_ + 1), str);
     }
- 
-    ~Str(void)                      // Destructor
-    {
-        if (!str_) return;
-        std::cout << "Str destructor " << str_ << std::endl;
-        delete [] str_;
+
+    string(string const & other)
+        : data_(NULL), len_(other.len_) {
+        if (!other.empty()) {
+            data_ = strcpy((char *)malloc(len_ + 1), other.data_);
+        }
     }
- 
-    const Str& operator=(Str rhs)   // Assignment operator
-    {
-        rhs.swap(*this);            // Using copy-and-swap idiom
-        return (*this);
+
+    ~string() {
+        if (data_ != NULL) {
+            free(data_);
+        }
     }
- 
-    void swap(Str& rhs)
-    {
-        std::swap(str_, rhs.str_);
+
+    string& operator=(string other) {
+        swap(other);
+        return *this;
     }
- 
-    operator char*(void) const
-    {
-        return str_;
+
+    void swap(string& other) {
+        char * d = data_;
+        size_t l = len_;
+        data_ = other.data_;
+        len_  = other.len_;
+        other.data_ = d;
+        other.len_  = l;
     }
- 
-    Str& operator+=(const char* rhs)
-    {
-        if (rhs) strcat_s(str_, 1024, rhs);
-        return (*this);
+
+    size_t length() const {
+        return len_;
     }
- 
-    friend Str operator+(const Str& x, const Str& y)
-    {
-        return Str(x) += y;
+
+    bool empty() const {
+        return length() == 0;
+    }
+
+    void clear() {
+        if ((data_ != NULL) || (len_ != 0)) {
+            free(data_);
+            len_ = 0;
+        }
+    }
+
+    char const * data () const { return data_; }
+    char       * data ()       { return data_; }
+    char const * cdata() const { return data_; }
+
+    char   operator[](size_t i) const { return data_[i]; }
+    char & operator[](size_t i)       { return data_[i]; }
+
+    string& operator+=(char c) {
+        extend(len_ + 1);
+        data_[len_ - 1] = c;
+        data_[len_]     = '\0';
+        return *this;
+    }
+
+    string& operator+=(string const & other) {
+        if (!other.empty()) {
+            extend(len_ + other.len_);
+            strcat(data_, other.data_);
+        }
+        return *this;
+    }
+
+    friend string operator+(string const & x, string const & y) {
+        return string(x) += y;
     }
 };
- 
-int main(int argc, char* argv[])
-{
-    Str ss;
-    Str s1("Hello"), s2("-"), s3("World"), s4("!");
-    std::cout << std::endl;
- 
-    ss = s1 + s2 + s3 + s4;
- 
-    std::cout << std::endl;
-    std::cout << ss << std::endl;
-    std::cout << std::endl;
+
+} // namespace test
+```
+如上实现，仅使用标准C函数。
+
+我们可以看到，关键的`operator+`重载，由于不能修改任何一个参数，所以必须在内部构建一个匿名临时变量`string(x)`。这个临时变量导致我们不可能像`operator+=`一样用引用作为`operator+`的返回值，否则外部将得到一个悬空引用。函数调用完毕后，外部接到返回值，必须马上进行拷贝构造，之后这个匿名临时变量就会自动销毁，于是一个简单的返回值造成了两次拷贝。
+
+当然，`operator+`的参数类型是`string const &`，这个引用可以直接绑定返回值，但其本身作为参数`x`还是必须在函数内部拷贝给新的匿名临时变量`string(x)`。出现如 `ss = s1 + '-' + s2 + s3` 这样的连续调用时，拷贝就会像击鼓传花一样，在每一次`operator+`返回时发生。
+
+为了说明问题，我们可以跟踪一下构造函数，来看看这样到底会有多大的损耗：
+
+```cpp
+// ......
+
+// 为构造和析构函数加上输出
+
+string()
+    : data_(NULL), len_(0) {
+    printf("string constructor\n");
+}
+
+string(char c)
+    : data_(NULL), len_(1) {
+    data_ = (char *)malloc(len_ + 1);
+    data_[0] = c;
+    data_[1] = '\0';
+    printf("string constructor: %s\n", data_);
+}
+
+string(char const * str)
+    : data_(NULL), len_(strlen(str)) {
+    data_ = strcpy((char *)malloc(len_ + 1), str);
+    printf("string constructor: %s\n", data_);
+}
+
+string(string const & other)
+    : data_(NULL), len_(other.len_) {
+    if (!other.empty()) {
+        data_ = strcpy((char *)malloc(len_ + 1), other.data_);
+    }
+    printf("string copy constructor: %s\n", data_);
+}
+
+~string() {
+    printf("string destructor");
+    if (data_ != NULL) {
+        printf(": %s", data_);
+        free(data_);
+    }
+    printf("\n");
+}
+
+// ......
+
+using namespace test;
+
+int main() {
+    string ss;
+    string s1("Hello"), s2("World"), s3("!");
+    ss = s1 + '-' + s2 + s3;
+    std::cout << ss.cdata() << std::endl;
     return 0;
 }
 ```
-
- 这是一个简单的`Str`类，包装了一个`char*`，并限制字符串长度为1024。程序运行之后，我们得到如下打印信息：
-
-```bash
-Str copy constructor Hello
-Str copy constructor Hello-
-Str destructor Hello-
-Str copy constructor Hello-
-Str copy constructor Hello-World
-Str destructor Hello-World
-Str copy constructor Hello-World
-Str copy constructor Hello-World!
-Str destructor Hello-World!
-Str destructor Hello-World
-Str destructor Hello-
+得到打印如下：
 ```
-
-连续6次拷贝构造，并且最终这些临时生成的字符串统统炸鞭炮一样噼里啪啦被销毁掉了。一次拷贝的工作是`new`一个1024的大内存块，再来一次`strcpy`。连续的构造-拷贝-析构，对性能会有相当大的影响。所以尽量选择`+=`其实是不得已而为之的事情。
-
-同样的道理，我们也很少写`Str to_string(int i)`，取而代之是`void to_string(int i, Str& s)`。为了避免返回值的性能问题，我们不得不牺牲掉代码的优雅，用蹩脚的参数来解决。
+string constructor
+string constructor: Hello
+string constructor: World
+string constructor: !
+string constructor: -
+string copy constructor: Hello
+string copy constructor: Hello-
+string destructor: Hello-
+string copy constructor: Hello-
+string copy constructor: Hello-World
+string destructor: Hello-World
+string copy constructor: Hello-World
+string copy constructor: Hello-World!
+string destructor: Hello-World!
+string destructor
+string destructor: Hello-World
+string destructor: Hello-
+string destructor: -
+Hello-World!
+string destructor: !
+string destructor: World
+string destructor: Hello
+string destructor: Hello-World!
+```
+除去“Hello-World!”的输出，我们可以看到6次拷贝构造，以及对应的析构动作。
 
 除了性能之外，对象的所有权也是一个问题。例如我们现在有一个Handle类，它负责管理某个文件的句柄，并且文件的访问是互斥的。很显然，Handle类和打开的文件应该是一对一的，不应该存在多个Handle管理或访问一个文件的情况。那么这样一个Handle类应该如何写呢？
-
 ```cpp
-class Handle
-{
+class Handle {
 private:
     handle_t h_;
 
 public:
-    Handle(const string& name) : h_(0)
-    {
-        // ... may be open a file
+    Handle(const string& name) : h_(0) {
+        // ... 可能会在这里打开某个文件
     }
 
-    Handle(const Handle& handle) : h_(0)
-    {
-        // ... ???
+    Handle(const Handle& handle) : h_(0) {
+        // ... copy constructor ???
     }
 };
 ```
-
- 或许，我们可以禁止掉拷贝动作？
-
+ 或许，我们应该直接禁止拷贝？
 ```cpp
-class Handle
-{
+class Handle {
 private:
     handle_t h_;
 
@@ -201,19 +259,21 @@ public:
     // ......
 };
 ```
-
- 那么怎样返回一个`Handle`对象呢？
-
+那么这个时候，怎样通过函数返回一个`Handle`对象呢？
 ```cpp
-Handle open_file(const string& name)
-{
-    return Handle(name); // ???
+Handle do_open(int id) {
+    return Handle((id == 0) ? /* ... */ : /* ... */); // error
+}
+
+// 我们只能使用参数，通过引用或指针返回一个Handle
+bool open_file(Handle* h, int id) {
+    // ......
 }
 ```
 
 ## 2. 一些解决方案
 
-### 2.1 std::auto\_ptr
+### 2.1 std::auto_ptr
 
 `std::auto_ptr`是C++98/03里提供的智能指针，它在C++11中被废弃，并在C++17中被删除。在C++98/03的时候，会使用它的人也是少数（这里的“会”有双重含义，会用，和会去用）。
 
