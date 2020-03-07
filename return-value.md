@@ -273,9 +273,41 @@ bool open_file(Handle* h, int id) {
 
 ## 2. 一些解决方案
 
-### 2.1 std::auto_ptr
+### 2.1 返回值优化（RVO、NRVO）
 
-`std::auto_ptr`是C++98/03里提供的智能指针，它在C++11中被废弃，并在C++17中被删除。在C++98/03的时候，会使用它的人也是少数（这里的“会”有双重含义，会用，和会去用）。
+返回值优化（RVO，Return Value Optimization）；具名返回值优化（NRVO，Named Return Value Optimization）。NRVO是RVO的一个补充，它们都是针对返回值性能问题的编译器优化技术。这个技术也被称为“elision（消除）”。
+
+RVO和NRVO分别指的是下面这两种情况：
+```cpp
+vector<int> get_vec_rvo(size_t n) {
+    return vector<int>(n); // RVO
+}
+
+vector<int> get_vec_nrvo(size_t n) {
+    vector<int> tmp(n);
+    return tmp; // NRVO
+}
+
+int main() {
+    vector<int> v1 = get_vec_rvo(5);
+    vector<int> v2 = get_vec_nrvo(5);
+    return 0;
+}
+```
+如上的代码里，临时变量`vector<int>(n)`和`tmp`就仿佛穿透了函数一样，直接分别构建为`v1`和`v2`，不存在任何拷贝动作。在C++98/03标准里，对于返回值优化并没有做任何规定。但目前的主流编译器都支持这一特征。在C++11及以后的标准里，这个技术方案被称为“copy elision（复制消除）”，明确的定义在了标准文档中。
+
+### 2.2 std::auto_ptr
+
+`std::auto_ptr`是C++98/03里提供的智能指针，它在C++11中被废弃（deprecated），并在C++17中被删除（removed）。在C++98/03的时候，会使用它的人也是少数（这里的“会”有双重含义：会用，和会去用）。
+
+它的构造函数声明如下（参考：[std::auto_ptr<T>::auto_ptr - cppreference.com](https://en.cppreference.com/w/cpp/memory/auto_ptr/auto_ptr)）：
+```cpp
+explicit auto_ptr( X* p = 0 ) throw();
+auto_ptr( auto_ptr& r ) throw();
+template< class Y >
+auto_ptr( auto_ptr<Y>& r ) throw();
+auto_ptr( auto_ptr_ref<X> m ) throw();
+```
 
 `std::auto_ptr`负责管理一块堆内存的生存期，并且，`std::auto_ptr`也是独占式的，每个`std::auto_ptr`指向的内存块都不同。那么`std::auto_ptr`能否作为返回值呢？
 
@@ -327,7 +359,7 @@ std::cout << *pi << std::endl; // crash
 
 因此，在项目中使用`std::auto_ptr`往往是一个糟糕的决定。我们必须在代码review的时候仔细检查每个`std::auto_ptr`的使用是否正确，或者干脆禁止`std::auto_ptr`之间的赋值行为。
 
-### 2.2 写时拷贝（COW，copy-on-write）和引用计数（Reference Counting）
+### 2.3 写时拷贝（COW，copy-on-write）和引用计数（Reference Counting）
 
 我们可以不需要每次都拷贝数据，只有当数据发生改写的时候，才会出现拷贝操作。这个技巧可以让普通拷贝操作的时间复杂度降到O\(1\)。
 
@@ -347,41 +379,6 @@ std::cout << *pi << std::endl; // crash
 听起来似乎挺好，如果使用COW能够解决所有问题的话……对于`Str to_string(int i)`一类的问题，COW确实有足够高的性能，但对于我们一开始的“`ss = s1 + s2 + s3 + s4`”，COW帮不了太多忙。
 
 这是因为虽然`Str(x)`时，生成临时对象的拷贝不存在了，但马上执行的赋值改写操作不得不让内存被复制一遍，传递到下一层情况也不会有任何改变，连续赋值导致连续复制，在这种情况下原先的性能问题依然存在。
-
-### 2.3 返回值优化（RVO、NRVO）
-
-RVO（Return Value Optimization），中文为返回值优化；NRVO（Named Return Value Optimization）具名返回值优化是RVO的一个补充。它们都是针对返回值性能问题的编译器优化技术，目前主流的编译器对它们都有很好的支持。
-
-RVO和NRVO分别指的是下面这两种情况：
-
-```cpp
-Str make_string1(const char* str)
-{
-    return Str(str); // RVO
-}
-
-Str make_string2(const char* str)
-{
-    Str tmp(str);
-    return tmp; // NRVO
-}
-
-int main(void)
-{
-    Str s1 = make_string1("123");
-    Str s2 = make_string2("321");
-    return 0;
-}
-```
-
-打印输出如下：
-
-```bash
-Str constructor 123
-Str constructor 321
-Str destructor 321
-Str destructor 123
-```
 
 ### 2.4 我们需要移动
 
