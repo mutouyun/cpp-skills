@@ -296,6 +296,48 @@ int main() {
 ```
 如上的代码里，临时变量`vector<int>(n)`和`tmp`就仿佛穿透了函数一样，直接分别构建为`v1`和`v2`，不存在任何拷贝动作。在C++98/03标准里，对于返回值优化并没有做任何规定。但目前的主流编译器都支持这一特征。在C++11及以后的标准里，这个技术方案被称为“copy elision（复制消除）”，明确的定义在了标准文档中。
 
+比如说，我们把上面`string`的`operator+`稍微修改一下：
+```cpp
+friend string operator+(string const & x, string const & y) {
+    string tmp(x);
+    tmp += y;
+    return tmp;
+}
+```
+运行结果：
+```
+string constructor
+string constructor: Hello
+string constructor: World
+string constructor: !
+string constructor: -
+string copy constructor: Hello
+string copy constructor: Hello-
+string copy constructor: Hello-World
+string destructor
+string destructor: Hello-World
+string destructor: Hello-
+string destructor: -
+Hello-World!
+string destructor: !
+string destructor: World
+string destructor: Hello
+string destructor: Hello-World!
+```
+可以很清晰的看到，NRVO生效了，只有3次必须的copy constructor。RVO和NRVO可以极大地改善返回值的效率，但也存在很大的局限性。比如我们之前的`operator+`写法：
+```cpp
+friend string operator+(string const & x, string const & y) {
+    return string(x) += y;
+}
+```
+就不会触发任何返回值优化。另外，它对于`string tmp(x)`这样在构建临时变量时触发的拷贝也无能为力。
+
+参考：
+1. [Copy elision - cppreference.com](https://en.cppreference.com/w/cpp/language/copy_elision)
+2. [RVO V.S. std::move (C/C++ compilers for IBM Z Blog)](https://www.ibm.com/developerworks/community/blogs/5894415f-be62-4bc0-81c5-3956e82276f3/entry/RVO_V_S_std_move?lang=en)
+3. [Rvalue References and Move Semantics in C++11 - Cprogramming.com](https://www.cprogramming.com/c++11/rvalue-references-and-move-semantics-in-c++11.html)
+4. [C++ 17 最大的改变——Guaranteed copy elision - 知乎](https://zhuanlan.zhihu.com/p/22821671)
+
 ### 2.2 std::auto_ptr
 
 `std::auto_ptr`是C++98/03里提供的智能指针，它在C++11中被废弃（deprecated），并在C++17中被删除（removed）。在C++98/03的时候，会使用它的人也是少数（这里的“会”有双重含义：会用，和会去用）。
