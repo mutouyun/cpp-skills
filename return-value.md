@@ -36,7 +36,7 @@ Hello-World!
 ```
 结果是正确的，但在性能上会非常难受。为了说明问题，我们先给出一个简单的`string`实现：
 ```cpp
-// Using C++ 98/03
+// Using C++ 98/03, without STL
 
 #include <stddef.h>
 #include <string.h>
@@ -338,91 +338,274 @@ friend string operator+(string const & x, string const & y) {
 3. [Rvalue References and Move Semantics in C++11 - Cprogramming.com](https://www.cprogramming.com/c++11/rvalue-references-and-move-semantics-in-c++11.html)
 4. [C++ 17 最大的改变——Guaranteed copy elision - 知乎](https://zhuanlan.zhihu.com/p/22821671)
 
-### 2.2 std::auto_ptr
-
-`std::auto_ptr`是C++98/03里提供的智能指针，它在C++11中被废弃（deprecated），并在C++17中被删除（removed）。在C++98/03的时候，会使用它的人也是少数（这里的“会”有双重含义：会用，和会去用）。
-
-它的构造函数声明如下（参考：[std::auto_ptr<T>::auto_ptr - cppreference.com](https://en.cppreference.com/w/cpp/memory/auto_ptr/auto_ptr)）：
-```cpp
-explicit auto_ptr( X* p = 0 ) throw();
-auto_ptr( auto_ptr& r ) throw();
-template< class Y >
-auto_ptr( auto_ptr<Y>& r ) throw();
-auto_ptr( auto_ptr_ref<X> m ) throw();
-```
-
-`std::auto_ptr`负责管理一块堆内存的生存期，并且，`std::auto_ptr`也是独占式的，每个`std::auto_ptr`指向的内存块都不同。那么`std::auto_ptr`能否作为返回值呢？
-
-```cpp
-std::auto_ptr<int> make_int(int a)
-{
-    return std::auto_ptr<int>(new int(a));
-}
-
-int main(void)
-{
-    std::auto_ptr<int> pi = make_int(123);
-    std::cout << *pi << std::endl;
-    return 0;
-}
-```
-
-可以看到，`make_int`工作得很好。这是因为`std::auto_ptr`在拷贝构造函数中强行获取了对方的资源所有权：
-
-```cpp
-template <typename T>
-class auto_ptr
-{
-private:
-    T* p_;
-
-public:
-    // ...
-
-    auto_ptr(auto_ptr& a) : p_(a.release()) {}
-
-    template <typename U>
-    auto_ptr(auto_ptr<U>& a) : p_(a.release()) {}
-
-    // ...
-};
-```
-
-这种违反直觉的行为极容易导致更多的问题。比如：
-
-```cpp
-std::auto_ptr<int> pi = make_int(123);
-std::auto_ptr<int> pj = pi;
-
-// ...
-
-std::cout << *pi << std::endl; // crash
-```
-
-因此，在项目中使用`std::auto_ptr`往往是一个糟糕的决定。我们必须在代码review的时候仔细检查每个`std::auto_ptr`的使用是否正确，或者干脆禁止`std::auto_ptr`之间的赋值行为。
-
-### 2.3 写时拷贝（COW，copy-on-write）和引用计数（Reference Counting）
+### 2.2 写时拷贝（COW，copy-on-write）和引用计数（Reference Counting）
 
 我们可以不需要每次都拷贝数据，只有当数据发生改写的时候，才会出现拷贝操作。这个技巧可以让普通拷贝操作的时间复杂度降到O\(1\)。
 
-体现在代码上，上文中`Str`的拷贝构造函数内，就不再直接使用`strcpy_s`了，取而代之的是一行短短的指针复制（注意不是内容复制）的浅拷贝。直到`+=`这种会改变自身内容的操作时，`Str`内部才会再创建一份内存，并把现有的数据拷贝一次。
+体现在代码上，`string`的拷贝构造函数内，就不再直接使用`strcpy`了，取而代之的是内部指针的浅拷贝。直到`+=`这种会改变自身内容的操作时，`string`才会创建一份新内存，对现有的数据进行一次深拷贝。
 
-修改`Str`有两个关键点：
+修改`string`有两个关键点：
 
-1. 我们需要使用“引用计数”，来标记当前的内存块被多少个`Str`共有，否则的话一个`Str`在析构时删除内存，所有与之相关的其他`Str`类内部的指针全部都会成为野指针。
-2. 我们需要处理所有的“写”动作，什么时候`Str`需要被改写，在这之前我们就必须将它拷贝出来。
+1. 我们需要使用“引用计数”，来标记当前的内存块被多少个`string`共有，否则的话一个`string`在析构时删除内存，所有与之相关的其他`string`类内部的指针全部都会成为野指针。
+2. 我们需要处理所有的“写”动作，什么时候`string`需要被改写，在这之前我们就必须将它拷贝出来。
 
-使用COW之后的`Str`看起来可能像这样：
+使用COW之后的`string`看起来可能像这样：
 
-![](https://yuml.me/diagram/plain;dir:LR/class/[rc_string%7C-str_:char*%7C+~rc_string%28%29;+rc_string*%20clone%28%29],[Str%7C-rc_str_:rc_string*%7C+~Str%28%29;+Str&%20operator+=%28const%20char*%29%7Bbg:tomato%7D],[Str]*-1%3E[rc_string],[Str]-[note:Multiple%20Str%20objects%20use%20a%20same%20rc-string%7Bbg:cornsilk%7D],[rc_base%7C+inc%28%29;+dec%28%29]%5E-[rc_string])
+![](https://yuml.me/diagram/plain;dir:LR/class/[rc_string%7C-data_:char*%7C+~rc_string%28%29;+rc_string*%20clone%28%29],[string%7C-rc_data_:rc_string*%7C+~string%28%29;+string&%20operator+=%28string%20const&%29%7Bbg:tomato%7D],[string]*-1%3E[rc_string],[string]-[note:Multiple%20Str%20objects%20use%20a%20same%20rc_string%7Bbg:cornsilk%7D],[rc_base%7C+~rc_base%28%29;+inc%28%29;+dec%28%29]%5E-[rc_string])
 
-有了COW之后，我们可以不需要通过引用或指针来传递一个对象（因为对象的拷贝其实也是浅拷贝）；可以直接通过返回值返回一个对象，而不必担心效率问题。同时，引用计数也保证了下层资源的所有权问题，上图的字符串完全可以换成某个独占资源的句柄（可能需要调整拷贝动作）。
+有了COW之后，我们可以不需要通过引用或指针来传递一个对象（因为对象的拷贝其实也是浅拷贝）；可以直接通过返回值返回一个对象，而不必担心效率问题。同时，引用计数也保证了下层资源的所有权问题，上图的字符串完全可以换成某个独占资源的句柄。
 
-听起来似乎挺好，如果使用COW能够解决所有问题的话……对于`Str to_string(int i)`一类的问题，COW确实有足够高的性能，但对于我们一开始的“`ss = s1 + s2 + s3 + s4`”，COW帮不了太多忙。
+我们来尝试简单实现一下基于COW的`string`。首先完成对引用计数的封装：
+```cpp
+// Using C++ 98/03, without STL
 
-这是因为虽然`Str(x)`时，生成临时对象的拷贝不存在了，但马上执行的赋值改写操作不得不让内存被复制一遍，传递到下一层情况也不会有任何改变，连续赋值导致连续复制，在这种情况下原先的性能问题依然存在。
+class rc_base {
+    int rc_;
 
-### 2.4 我们需要移动
+    rc_base(rc_base const &);
+    rc_base& operator=(rc_base const &);
 
-## 3. C++11的右值引用和移动语义
+protected:
+    rc_base() : rc_(0) {}
+
+public:
+    virtual ~rc_base() {}
+
+    int ref_count() const {
+        return rc_;
+    }
+
+    void inc() {
+        ++rc_;
+    }
+
+    void dec() {
+        if (--rc_ == 0) delete this;
+    }
+};
+
+class rc_string : public rc_base {
+    char * data_;
+    size_t len_;
+
+public:
+    rc_string()
+        : data_(NULL), len_(0) {
+    }
+
+    ~rc_string() {
+        if (data_ != NULL) free(data_);
+    }
+
+    size_t length() const { return len_; }
+
+    char const * data() const { return data_; }
+    char       * data()       { return data_; }
+
+    void extend(size_t new_len) {
+        if (new_len <= len_) return;
+        data_ = (char *)realloc((void *)data_, (len_ = new_len) + 1);
+    }
+
+    rc_string* clone() {
+        rc_string* rs = new rc_string;
+        if (len_ > 0) {
+            rs->extend(len_);
+            strcpy(rs->data(), data_);
+            printf("string clone: %s\n", data_);
+        }
+        return rs;
+    }
+};
+
+template <class T>
+class rc_ptr {
+    T* rc_data_;
+
+public:
+    rc_ptr(T* ptr)
+        : rc_data_(ptr) {
+        if (rc_data_ != NULL) rc_data_->inc();
+    }
+
+    rc_ptr(rc_ptr const & other)
+        : rc_data_(other.rc_data_) {
+        if (rc_data_ != NULL) rc_data_->inc();
+    }
+
+    ~rc_ptr() {
+        if (rc_data_ != NULL) rc_data_->dec();
+    }
+
+    rc_ptr& operator=(rc_ptr other) {
+        swap(other);
+        return *this;
+    }
+
+    void swap(rc_ptr& other) {
+        rc_string* d = rc_data_;
+        rc_data_ = other.rc_data_;
+        other.rc_data_ = d;
+    }
+
+    operator bool() const { return rc_data_ != NULL; }
+
+    T const * operator->() const { return rc_data_; }
+    T       * operator->()       { return rc_data_; }
+};
+```
+这里的rc实现类似一个侵入式智能指针。之后，对`string`进行改造：
+```cpp
+class string {
+    rc_ptr<rc_string> rc_data_;
+
+    void try_clone() {
+        if (rc_data_->ref_count() > 1) {
+            rc_data_ = rc_data_->clone();
+        }
+    }
+
+public:
+    string()
+        : rc_data_(new rc_string) {
+        printf("string constructor\n");
+    }
+
+    string(char c)
+        : rc_data_(new rc_string) {
+        rc_data_->extend(1);
+        rc_data_->data()[0] = c;
+        rc_data_->data()[1] = '\0';
+        printf("string constructor: %s\n", rc_data_->data());
+    }
+
+    string(char const * str)
+        : rc_data_(new rc_string) {
+        rc_data_->extend(strlen(str));
+        strcpy(rc_data_->data(), str);
+        printf("string constructor: %s\n", rc_data_->data());
+    }
+
+    string(string const & other)
+        : rc_data_(other.rc_data_) {
+    }
+
+    ~string() {
+        printf("string destructor");
+        if (!empty()) {
+            printf(": %s", rc_data_->data());
+        }
+        printf("\n");
+    }
+
+    string& operator=(string other) {
+        swap(other);
+        return *this;
+    }
+
+    void swap(string& other) {
+        rc_data_.swap(other.rc_data_);
+    }
+
+    size_t length() const {
+        return rc_data_->length();
+    }
+
+    bool empty() const {
+        return length() == 0;
+    }
+
+    void clear() {
+        if (!empty()) {
+            rc_data_ = new rc_string;
+        }
+    }
+
+    char const * data () const { return rc_data_->data(); }
+    char const * cdata() const { return rc_data_->data(); }
+
+    char operator[](size_t i) const { return data()[i]; }
+
+    char * data() {
+        try_clone();
+        return rc_data_->data();
+    }
+
+    char & operator[](size_t i) {
+        try_clone();
+        return data()[i];
+    }
+
+    string& operator+=(char c) {
+        try_clone();
+        rc_data_->extend(length() + 1);
+        rc_data_->data()[length() - 1] = c;
+        rc_data_->data()[length()]     = '\0';
+        return *this;
+    }
+
+    string& operator+=(string const & other) {
+        if (!other.empty()) {
+            try_clone();
+            rc_data_->extend(length() + other.length());
+            strcat(rc_data_->data(), other.data());
+        }
+        return *this;
+    }
+
+    friend string operator+(string const & x, string const & y) {
+        string tmp(x);
+        tmp += y;
+        return tmp;
+    }
+};
+```
+从现在开始，`string`的拷贝再也不会引起性能问题了……然而，对于我们的`operator+`来说，COW和RVO存在一样的问题。
+
+同样的测试代码：
+```cpp
+// ......
+
+using namespace test;
+
+int main() {
+    string ss;
+    string s1("Hello"), s2("World"), s3("!");
+    ss = s1 + '-' + s2 + s3;
+    std::cout << ss.cdata() << std::endl;
+    return 0;
+}
+```
+得到打印如下：
+```
+string constructor
+string constructor: Hello
+string constructor: World
+string constructor: !
+string constructor: -
+string clone: Hello
+string clone: Hello-
+string clone: Hello-World
+string destructor
+string destructor: Hello-World
+string destructor: Hello-
+string destructor: -
+Hello-World!
+string destructor: !
+string destructor: World
+string destructor: Hello
+string destructor: Hello-World!
+```
+理所当然的，我们看到了3次必须的clone操作。
+
+这是因为虽然`string tmp(x)`生成临时对象的拷贝不存在了，但马上执行的`operator+=`操作必须进行一次深拷贝，在这种情况下原先的性能问题依然存在。
+
+另外，对字符串使用COW也并不总是能提高我们的执行效率。比如上面的简单实现中，并没有考虑多线程下的安全问题；并且对非`const`对象的`operator[]`操作一定会触发一次“写”动作。而为了解决这些问题，实际上基于COW的对象不得不引入一些复杂的设计。
+
+参考：
+1. [std::string的Copy-on-Write：不如想象中美好 - PromisE_谢 - 博客园](https://www.cnblogs.com/promise6522/archive/2012/03/22/2412686.html)
+
+### 2.3 Mojo（Move of Joint Objects）
+
+## 3. 右值引用和移动语义
 
