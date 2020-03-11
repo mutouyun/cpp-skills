@@ -262,7 +262,8 @@ public:
 那么这个时候，怎样通过函数返回一个`Handle`对象呢？
 ```cpp
 Handle do_open(int id) {
-    return Handle((id == 0) ? /* ... */ : /* ... */); // error
+    // error until C++17
+    return Handle((id == 0) ? /* ... */ : /* ... */);
 }
 
 // 我们只能使用参数，通过引用或指针返回一个Handle
@@ -324,7 +325,9 @@ string destructor: World
 string destructor: Hello
 string destructor: Hello-World!
 ```
-可以很清晰的看到，NRVO生效了，只有3次必须的copy constructor。RVO和NRVO可以极大地改善返回值的效率，但也存在很大的局限性。比如我们之前的`operator+`写法：
+可以很清晰的看到，NRVO生效了，只有3次必须的copy constructor。
+
+RVO和NRVO可以极大地改善返回值的效率，但也存在很大的局限性。比如我们之前的`operator+`写法：
 ```cpp
 friend string operator+(string const & x, string const & y) {
     return string(x) += y;
