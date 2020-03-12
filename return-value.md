@@ -133,11 +133,11 @@ public:
         }
         return *this;
     }
-
-    friend string operator+(string const & x, string const & y) {
-        return string(x) += y;
-    }
 };
+
+string operator+(string const & x, string const & y) {
+    return string(x) += y;
+}
 
 } // namespace test
 ```
@@ -276,7 +276,7 @@ bool open_file(Handle* h, int id) {
 
 ### 2.1 返回值优化（RVO、NRVO）
 
-返回值优化（RVO，Return Value Optimization）；具名返回值优化（NRVO，Named Return Value Optimization）。NRVO是RVO的一个补充，它们都是针对返回值性能问题的编译器优化技术。这个技术也被称为“elision（消除）”。
+返回值优化（RVO，Return Value Optimization）；具名返回值优化（NRVO，Named Return Value Optimization）。NRVO是RVO的一个补充，它们都是针对返回值性能问题的编译器优化技术。
 
 RVO和NRVO分别指的是下面这两种情况：
 ```cpp
@@ -295,11 +295,11 @@ int main() {
     return 0;
 }
 ```
-如上的代码里，临时变量`vector<int>(n)`和`tmp`就仿佛穿透了函数一样，直接分别构建为`v1`和`v2`，不存在任何拷贝动作。在C++98/03标准里，对于返回值优化并没有做任何规定。但目前的主流编译器都支持这一特征。在C++11及以后的标准里，这个技术方案被称为“copy elision（复制消除）”，明确的定义在了标准文档中。
+如上的代码里，临时变量`vector<int>(n)`和`tmp`就仿佛穿透了函数一样，直接分别构建为`v1`和`v2`，不存在任何拷贝动作。这个技术方案被称为“copy elision（复制消除）”，目前的主流编译器都支持这一特征。
 
-比如说，我们把上面`string`的`operator+`稍微修改一下：
+我们再看个例子。把上面`string`的`operator+`稍微修改一下：
 ```cpp
-friend string operator+(string const & x, string const & y) {
+string operator+(string const & x, string const & y) {
     string tmp(x);
     tmp += y;
     return tmp;
@@ -329,7 +329,7 @@ string destructor: Hello-World!
 
 RVO和NRVO可以极大地改善返回值的效率，但也存在很大的局限性。比如我们之前的`operator+`写法：
 ```cpp
-friend string operator+(string const & x, string const & y) {
+string operator+(string const & x, string const & y) {
     return string(x) += y;
 }
 ```
@@ -555,12 +555,6 @@ public:
         }
         return *this;
     }
-
-    friend string operator+(string const & x, string const & y) {
-        string tmp(x);
-        tmp += y;
-        return tmp;
-    }
 };
 ```
 从现在开始，`string`的拷贝再也不会引起性能问题了……然而，对于我们的`operator+`来说，COW和RVO存在一样的问题。
@@ -609,6 +603,310 @@ string destructor: Hello-World!
 1. [std::string的Copy-on-Write：不如想象中美好 - PromisE_谢 - 博客园](https://www.cnblogs.com/promise6522/archive/2012/03/22/2412686.html)
 
 ### 2.3 Mojo（Move of Joint Objects）
+
+Andrei Alexandrescu，《Modern C++ Design》的作者，2003年曾在Generic上发过一篇著名的文章《Move Constructors》，里面给出了他对于这个问题的解决方案：Mojo (Move of Joint Objects)，核心在于从语义上区分出“临时值”的概念来。
+
+我们来看看Mojo方案提供的几个模板工具：
+```cpp
+namespace mojo {
+
+template <class T>
+class constant /* type sugar for constants */ {
+    T const * data_;
+
+public:
+    explicit constant(const T& obj) : data_(&obj) {}
+    const T& get() const { return *data_; }
+};
+
+template <class T>
+class temporary /* type sugar for temporaries */ : private constant<T> {
+public:
+    explicit temporary(T& obj) : constant<T>(obj) {}
+    T& get() const { return const_cast<T&>(constant<T>::get()); }
+};
+
+template <class T>
+struct enabled /* inside mojo */ {
+
+    operator constant<T>() const {
+        return constant<T>(static_cast<const T&>(*this));
+    }
+
+    operator temporary<T>() {
+        return temporary<T>(static_cast<T&>(*this));
+    }
+
+protected:
+    enabled() {} // intended to be derived from
+    ~enabled() {} // intended to be derived from
+};
+
+} // namespace mojo
+```
+然后为`string` **添加** 一个处理临时对象的“移动”构造函数：
+```cpp
+class string : public mojo::enabled<string> {
+    // ......
+
+    string(mojo::temporary<string> other)
+        : data_(NULL), len_(other.get().len_) {
+        swap(other.get());
+        printf("string move constructor: %s\n", data_);
+    }
+
+    // ......
+};
+```
+让我们来看看它是怎么工作的。首先，对于函数的参数：
+```cpp
+// binds to non-const temporaries
+void connect(mojo::temporary<string>) {
+    std::cout << "mojo::temporary<string>" << std::endl;
+}
+
+// binds to all const objects (lvalues AND temporaries)
+void connect(mojo::constant<string>) {
+    std::cout << "mojo::constant<string>" << std::endl;
+}
+
+// binds to non-const lvalues
+void connect(string& str) {
+    // just forward to the other overload
+    connect(mojo::constant<string>(str));
+}
+```
+Mojo通过`constant`、`temporary`和普通左值引用`string&`成功区分了3种不同的语义：
+```cpp
+string s1("http://moderncppdesign.com");
+// invoke connect(string&)
+connect(s1);
+
+// invoke operator TemporaryString()
+// followed by connect(TemporaryString)
+connect(string("http://moderncppdesign.com"));
+
+const string s2("http://moderncppdesign.com");
+// invoke operator ConstantString() const
+// followed by connect(ConstantString)
+connect(s2);
+```
+那么同样的，`operator+`可以定义为：
+```cpp
+string operator+(mojo::constant<string> x, string const & y) {
+    string tmp(x.get());
+    tmp += y;
+    return tmp;
+}
+
+string operator+(mojo::temporary<string> x, string const & y) {
+    x.get() += y;
+    return x;
+}
+
+string operator+(string & x, string const & y) {
+    return mojo::constant<string>(x) + y;
+}
+```
+类似`connect`，使用三个不同的重载对应三种不同的情况。测试结果如下：
+```
+string constructor
+string constructor: Hello
+string constructor: World
+string constructor: !
+string constructor: -
+string copy constructor: Hello
+string move constructor: Hello-World
+string move constructor: Hello-World!
+string destructor
+string destructor
+string destructor
+string destructor: -
+Hello-World!
+string destructor: !
+string destructor: World
+string destructor: Hello
+string destructor: Hello-World!
+```
+现在，我们的方案工作得非常好。一次必须的拷贝构造，之后每次的字符串追加都是通过`move`动作获得临时对象的内存来完成，完全规避了耗时的拷贝动作。
+
+但这个方案无法涵盖所有的情况。比如，我们为了规避如 `if (s1 + s2 = s3)` 这样的意外赋值，需要为函数的返回值添加`const`限定符：
+```cpp
+string const operator+(mojo::constant<string> x, string const & y) {
+    string tmp(x.get());
+    tmp += y;
+    return tmp;
+}
+
+// ......
+```
+此时，`string const`会优先匹配到拷贝构造函数`string(string const &)`上，从而让我们的“移动”语义失效。对此，Mojo的解决方案是针对返回值提供`fnresult`类模板：
+```cpp
+namespace mojo {
+
+// ......
+
+template <class T>
+class fnresult : public T {
+public:
+    // The cast below is valid given that
+    // nobody ever really creates a const fnresult object
+    fnresult(fnresult const & rhs)
+        : T(temporary<T>(const_cast<fnresult&>(rhs))) {}
+
+    explicit fnresult(T& rhs) : T(temporary<T>(rhs)) {}
+};
+
+template <class T>
+struct enabled /* inside mojo */ {
+
+    operator constant<T>() const {
+        return constant<T>(static_cast<const T&>(*this));
+    }
+
+    operator temporary<T>() {
+        return temporary<T>(static_cast<T&>(*this));
+    }
+
+    operator fnresult<T>() {
+        return fnresult<T>(static_cast<T&>(*this));
+    }
+
+protected:
+    enabled() {} // intended to be derived from
+    ~enabled() {} // intended to be derived from
+};
+
+} // namespace mojo
+```
+同时，调整`string`的定义，将添加的“移动”构造函数改为两个，并修改`operator+`：
+```cpp
+class string : public mojo::enabled<string> {
+    // ......
+
+    string(mojo::temporary<string> other)
+        : data_(NULL), len_(other.get().len_) {
+        swap(other.get());
+        printf("string move constructor: %s\n", data_);
+    }
+
+    string(mojo::fnresult<string> other)
+        : data_(NULL), len_(other.len_) {
+        swap(other);
+        printf("string move constructor: %s\n", data_);
+    }
+
+    // ......
+};
+
+mojo::fnresult<string> const operator+(string const & x, string const & y) {
+    return string(x) += y;
+}
+
+mojo::fnresult<string> const operator+(mojo::fnresult<string> x, string const & y) {
+    return x += y;
+}
+```
+结果如下：
+```
+string constructor
+string constructor: Hello
+string constructor: World
+string constructor: !
+string constructor: -
+string copy constructor: Hello
+string move constructor: Hello-
+string destructor
+string move constructor: Hello-World
+string move constructor: Hello-World!
+string move constructor: Hello-World!
+string destructor
+string destructor
+string destructor
+string destructor
+string destructor: -
+Hello-World!
+string destructor: !
+string destructor: World
+string destructor: Hello
+string destructor: Hello-World!
+```
+对比之前的结果，我们可以看到多了一次`move constructor`，并且中间的构造、析构过程也有些不同。原因是`fnresult<string>`和`string`对象之间的赋值由于类型不同而不会触发RVO。
+
+Mojo方案确实可以完美的解决返回值的问题，但使用起来还是比较复杂的，并且相同动作的“移动”构造函数可能需要定义多个。我们可以忽略掉一些复杂的情况，比如不去试图区分参数的“all const objects”和“non-const lvalues”，专注于解决“临时值”，即右值的检测和传递。
+
+首先，我们定义`rvalue`类模板，来标记“右值”这一概念：
+```cpp
+template <typename T>
+class rvalue : public T {
+public:
+    rvalue(rvalue const & t)
+        : T(t) {}
+
+    T& get() const {
+        return *const_cast<rvalue*>(this);
+    }
+};
+```
+对应的，在`string`的定义中添加针对“右值”引用的“移动”构造函数，并修改`operator+`：
+```cpp
+class string {
+    // ......
+
+    string(rvalue<string> const & other)
+        : data_(NULL), len_(other.len_) {
+        swap(other.get());
+        printf("string move constructor: %s\n", data_);
+    }
+
+    operator rvalue<string> const & () const {
+        return static_cast<rvalue<string> const &>(*this);
+    }
+
+    // ......
+};
+
+rvalue<string> const operator+(string const & x, string const & y) {
+    return string(x) += y;
+}
+
+rvalue<string> const operator+(rvalue<string> const & x, string const & y) {
+    return x.get() += y;
+}
+```
+现在，在新的`operator+`里，`string(x) += y`的返回值会被传递给`rvalue(T const & t)`，并被`string(rvalue<string> const & other)`接收，完成移动语义；
+
+对于拷贝构造，则由拷贝构造函数`string(string const & other)`完成；
+
+而用于接收“右值”引用`rvalue<string> const &`的`operator+`，则在处理完`+=`操作后直接返回参数的引用。
+
+结果如下：
+```
+string constructor
+string constructor: Hello
+string constructor: World
+string constructor: !
+string constructor: -
+string copy constructor: Hello
+string move constructor: Hello-
+string destructor
+string move constructor: Hello-World
+string move constructor: Hello-World!
+string move constructor: Hello-World!
+string destructor
+string destructor
+string destructor
+string destructor
+string destructor: -
+Hello-World!
+string destructor: !
+string destructor: World
+string destructor: Hello
+string destructor: Hello-World!
+```
+
+参考：
+1. [Move Constructors | Dr Dobb's](https://www.drdobbs.com/move-constructors/184403855)
 
 ## 3. 右值引用和移动语义
 
